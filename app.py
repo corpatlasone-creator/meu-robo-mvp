@@ -4,23 +4,26 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import time
 import os
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Meu Robô MVP", layout="centered")
+st.set_page_config(page_title="Robô TJSP - Avaliação", layout="centered")
 
-st.title("🤖 Robô Processador de Listas")
-st.write("Faça upload da sua planilha 'Lista_Ouro'. O robô vai pesquisar item por item.")
+st.title("⚖️ Robô de Triagem TJSP")
+st.markdown("""
+**Instruções:**
+1. Suba uma planilha Excel (.xlsx).
+2. A planilha **DEVE** ter uma coluna chamada **"Processos"**.
+3. O robô vai verificar valores acima de R$ 250k.
+""")
 
-# --- 2. FUNÇÃO DO ROBÔ ---
+# --- 2. FUNÇÃO DO ROBÔ (A LÓGICA DO SEU VS CODE ADAPTADA) ---
 def rodar_robo(caminho_entrada, caminho_saida):
-    """
-    Lê a planilha, entra no site para cada linha, raspa dados e salva.
-    """
     
-    # --- CONFIGURAÇÃO BLINDADA PARA NUVEM (NÃO MEXA AQUI) ---
+    # --- CONFIGURAÇÃO BLINDADA PARA NUVEM ---
     chrome_options = Options()
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
@@ -28,115 +31,180 @@ def rodar_robo(caminho_entrada, caminho_saida):
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
 
-    # Caminhos fixos do servidor Streamlit Cloud (Crucial para funcionar)
+    # Caminhos do servidor Streamlit Cloud
     chrome_options.binary_location = "/usr/bin/chromium"
     service = Service("/usr/bin/chromedriver")
 
     driver = None
     
     try:
-        # Tenta carregar a planilha que você subiu
-        df = pd.read_excel(caminho_entrada)
+        # Lê a planilha
+        df_entrada = pd.read_excel(caminho_entrada)
         
-        # Cria uma lista vazia para guardar o que o robô encontrar
-        lista_resultados = []
+        # Verifica se a coluna existe
+        if "Processos" not in df_entrada.columns:
+            # Tenta ser inteligente: se não achar "Processos", pega a primeira coluna
+            coluna_alvo = df_entrada.columns[0]
+            st.warning(f"Aviso: Não achei a coluna 'Processos'. Usando a coluna '{coluna_alvo}' como base.")
+        else:
+            coluna_alvo = "Processos"
+            
+        lista_processos = df_entrada[coluna_alvo].astype(str).tolist()
+        resultados = []
 
-        # Inicia o navegador
+        # Inicia Driver
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        st.info(f"Navegador iniciado! A planilha tem {len(df)} linhas para processar.")
-
-        # Cria uma barra de progresso visual na tela
+        
+        st.info(f"Iniciando triagem de {len(lista_processos)} processos no TJSP...")
         barra_progresso = st.progress(0)
         
-        # --- AQUI É O LOOP MÁGICO (O CORAÇÃO DO ROBÔ) ---
-        # Para cada linha da planilha, ele vai fazer o seguinte:
-        for index, row in df.iterrows():
+        # --- LOOP PELOS PROCESSOS ---
+        for i, processo in enumerate(lista_processos):
             
+            dados_processo = {
+                "Processo": processo,
+                "Valor_Bruto": "N/D",
+                "Valor_Numerico": 0.0,
+                "Status": "ERRO/NÃO ENCONTRADO"
+            }
+
             try:
-                # Pega o valor da PRIMEIRA coluna da sua planilha (índice 0)
-                # Se sua planilha tiver cabeçalho, ele ignora o cabeçalho automaticamente
-                termo_pesquisa = str(row.iloc[0]) 
+                # Limpeza básica do número para evitar espaços
+                processo = processo.strip()
                 
-                # 1. Entra no site
-                driver.get("https://www.google.com")
+                driver.get("https://esaj.tjsp.jus.br/cpopg/open.do")
                 
-                # 2. Procura a barra de pesquisa e digita
-                # (O 'name="q"' é o nome da barra de busca do Google)
-                elemento_busca = driver.find_element(By.NAME, "q")
-                elemento_busca.clear()
-                elemento_busca.send_keys(termo_pesquisa)
-                elemento_busca.send_keys(Keys.RETURN) # Aperta Enter
+                # --- SUA LÓGICA DE TRATAMENTO DO NÚMERO ---
+                # Exemplo: 1000872-48.2023.8.26.0100
+                if "8.26" in processo:
+                    parte_numero_ano = processo.split("8.26")[0].strip(".")
+                    parte_foro = processo.split(".")[-1]
+                else:
+                    # Caso o número venha formatado diferente, tenta uma contingência simples
+                    parte_numero_ano = processo # Tenta jogar inteiro se falhar o split
+                    parte_foro = ""
+
+                # Preenche os campos
+                driver.find_element(By.ID, "numeroDigitoAnoUnificado").clear()
+                driver.find_element(By.ID, "numeroDigitoAnoUnificado").send_keys(parte_numero_ano)
                 
-                # Espera um pouquinho para a página carregar (importante!)
-                time.sleep(2)
+                driver.find_element(By.ID, "foroNumeroUnificado").clear()
+                driver.find_element(By.ID, "foroNumeroUnificado").send_keys(parte_foro)
                 
-                # 3. Tenta pegar uma informação da tela
-                # (Aqui estamos pegando o texto 'Aproximadamente X resultados')
+                driver.find_element(By.ID, "botaoConsultarProcessos").click()
+
+                # --- TRATAMENTO DE LISTA (SE HOUVER DUPLICIDADE) ---
                 try:
-                    resultado = driver.find_element(By.ID, "result-stats").text
+                    lista = driver.find_elements(By.ID, "processoSelecionado")
+                    if lista:
+                        lista[0].click()
+                        driver.find_element(By.ID, "botaoDetalhes").click()
                 except:
-                    resultado = "Info não encontrada"
+                    pass
                 
-                # Adiciona o que achou na lista
-                lista_resultados.append(resultado)
+                # Espera tabela carregar
+                WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "tabelaTodasMovimentacoes")))
+
+                # --- EXPANDIR DETALHES ---
+                try:
+                    link = driver.find_element(By.ID, "linkMaisDetalhes")
+                    if link.is_displayed():
+                        link.click()
+                except:
+                    pass
+
+                # --- BUSCA VALOR ---
+                valor_bruto = ""
+                # Tentativa 1: Pelo ID direto
+                try:
+                    elem = driver.find_element(By.ID, "valorAcaoProcesso")
+                    valor_bruto = elem.get_attribute("textContent")
+                except:
+                    pass
+
+                # Tentativa 2: Varredura no texto (Backup)
+                if "R$" not in valor_bruto:
+                    conteudo = driver.find_element(By.TAG_NAME, "body").text
+                    if "Valor da ação:" in conteudo:
+                        inicio = conteudo.find("Valor da ação:") + 14
+                        fim = conteudo.find("\n", inicio)
+                        valor_bruto = conteudo[inicio:fim]
+
+                # --- LIMPEZA MATEMÁTICA ---
+                # Remove tudo que não é dígito para converter
+                valor_limpo = "".join([c for c in valor_bruto if c.isdigit()])
                 
+                try: 
+                    # Divide por 100 para ajustar os centavos
+                    valor_float = float(valor_limpo) / 100 
+                except: 
+                    valor_float = 0.0
+
+                # --- REGRA DE NEGÓCIO (> 250 mil) ---
+                status = "DESCARTAR"
+                if valor_float > 250000:
+                    status = "POTENCIAL COMPRA 💰"
+
+                # Salva os dados
+                dados_processo["Valor_Bruto"] = valor_bruto.strip()
+                dados_processo["Valor_Numerico"] = valor_float
+                dados_processo["Status"] = status
+
+                # Pausa de segurança suave
+                time.sleep(1)
+
             except Exception as e:
-                # Se der erro numa linha específica, ele não para tudo, apenas anota o erro
-                lista_resultados.append(f"Erro nessa linha: {e}")
+                # Se falhar, registra o erro mas continua o loop
+                dados_processo["Status"] = f"Falha na leitura: {str(e)[:50]}..."
+
+            resultados.append(dados_processo)
             
-            # Atualiza a barra de progresso
-            barra_progresso.progress((index + 1) / len(df))
+            # Atualiza barra
+            barra_progresso.progress((i + 1) / len(lista_processos))
 
         # --- FIM DO LOOP ---
         
-        # Cria uma coluna nova na planilha chamada "Dados_Coletados"
-        df['Dados_Coletados'] = lista_resultados
+        # Cria DataFrame final
+        df_final = pd.DataFrame(resultados)
+        df_final.to_excel(caminho_saida, index=False)
         
-        # Salva o arquivo final
-        df.to_excel(caminho_saida, index=False)
-        
-        return True, "Sucesso! O robô terminou de ler todas as linhas."
+        return True, "Análise concluída com sucesso!"
 
     except Exception as e:
-        return False, f"Erro grave no sistema: {e}"
+        return False, f"Erro Crítico: {e}"
         
     finally:
         if driver:
             driver.quit()
 
-# --- 3. INTERFACE VISUAL (BOTÕES E DOWNLOAD) ---
+# --- 3. INTERFACE VISUAL ---
 
-arquivo_usuario = st.file_uploader("Selecione o arquivo .xlsx", type=["xlsx"])
+arquivo_usuario = st.file_uploader("Selecione sua planilha de processos (.xlsx)", type=["xlsx"])
 
 if arquivo_usuario is not None:
-    if st.button("Rodar Robô Agora"):
+    if st.button("🔍 Iniciar Varredura TJSP"):
         
-        with st.spinner('O robô está trabalhando... Isso pode levar alguns minutos.'):
-            
-            # Define nomes temporários
+        with st.spinner('O robô está trabalhando no TJSP...'):
             temp_entrada = f"temp_{arquivo_usuario.name}"
-            temp_saida = "Relatorio_Final.xlsx"
+            temp_saida = "Relatorio_Final_Auto.xlsx"
             
-            # Salva o arquivo no servidor
             with open(temp_entrada, "wb") as f:
                 f.write(arquivo_usuario.getbuffer())
             
-            # Chama a função
             sucesso, mensagem = rodar_robo(temp_entrada, temp_saida)
             
             if sucesso:
                 st.success(mensagem)
-                # Botão para baixar o resultado
+                st.balloons() # Um efeito visual de comemoração
                 with open(temp_saida, "rb") as file:
                     st.download_button(
-                        label="📥 BAIXAR PLANILHA PRONTA",
+                        label="📥 Baixar Relatório (Potenciais Compras)",
                         data=file,
-                        file_name="Lista_Processada.xlsx",
+                        file_name="Relatorio_Final_TJ.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
             else:
                 st.error(mensagem)
             
-            # Limpeza
             if os.path.exists(temp_entrada):
                 os.remove(temp_entrada)
