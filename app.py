@@ -1,56 +1,82 @@
-# --- 1. Importações (coloque isso no topo do arquivo) ---
+import streamlit as st
+import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 import time
+import os
 
-# --- 2. Função do Robô Atualizada ---
+# --- 1. CONFIGURAÇÃO DA PÁGINA (Deve ser a primeira coisa) ---
+st.set_page_config(page_title="Meu Robô MVP", layout="centered")
+
+st.title("🤖 Robô de Processamento")
+st.write("O sistema está online! Faça o upload da planilha abaixo.")
+
+# --- 2. FUNÇÃO DO ROBÔ (MODO FANTASMA) ---
 def rodar_robo(caminho_do_arquivo):
     """
-    Função que inicia o robô em modo Headless (sem janela)
-    para rodar em servidores na nuvem.
+    Roda o Selenium em modo Headless (sem janela) para funcionar na nuvem.
     """
-    print("Iniciando configuração do Chrome...")
+    log_txt = ""
     
-    # Configurando as opções para rodar "escondido" (Headless)
+    # Opções obrigatórias para servidor Linux
     chrome_options = Options()
-    
-    # O argumento mais importante: ativa o modo sem interface gráfica
     chrome_options.add_argument("--headless=new") 
-    
-    # Argumentos essenciais para evitar travamentos em servidores Linux/Docker
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    
-    # Define um tamanho de janela virtual (importante para sites responsivos não quebrarem)
     chrome_options.add_argument("--window-size=1920,1080")
 
-    # Inicializa o driver com as opções configuradas
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    
-    print("Chrome iniciado com sucesso em modo Headless!")
-
     try:
-        # --- AQUI COMEÇA A LÓGICA DO SEU ROBÔ ---
-        # Exemplo:
-        driver.get("https://www.google.com") # Substitua pelo site do seu projeto
-        print(f"Acessando site. Título da página: {driver.title}")
+        # Instala e inicia o Chrome
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        # Aqui você colocaria o código para ler o 'caminho_do_arquivo'
-        # e fazer o preenchimento...
+        # --- LÓGICA DO ROBÔ ---
+        st.info("Iniciando navegador oculto...")
         
-        # Simulando um tempo de processamento
-        time.sleep(2) 
+        # Exemplo: Acessa Google (substitua pelo seu site alvo)
+        driver.get("https://www.google.com")
+        titulo = driver.title
+        st.write(f"Acessou o site: {titulo}")
         
-        return "Processamento concluído com sucesso!"
+        # Lendo a planilha enviada (Exemplo)
+        df = pd.read_excel(caminho_do_arquivo)
+        st.write(f"Li uma planilha com {len(df)} linhas.")
+        
+        # Simulando trabalho
+        time.sleep(2)
+        
+        driver.quit()
+        return "Processamento finalizado com sucesso!"
 
     except Exception as e:
-        print(f"Erro durante a execução: {e}")
-        return f"Ocorreu um erro: {e}"
+        return f"Erro no robô: {e}"
+
+# --- 3. INTERFACE VISUAL DO STREAMLIT ---
+
+# Botão de Upload
+arquivo_usuario = st.file_uploader("Selecione o arquivo .xlsx", type=["xlsx"])
+
+if arquivo_usuario is not None:
+    # Mostra um botão para iniciar
+    if st.button("Rodar Robô Agora"):
         
-    finally:
-        # Muito importante: fecha o navegador ao terminar para não lotar a memória do servidor
-        driver.quit()
+        with st.spinner('O robô está trabalhando... Aguarde.'):
+            # Salva o arquivo temporariamente para o robô ler
+            nome_arquivo_temp = f"temp_{arquivo_usuario.name}"
+            with open(nome_arquivo_temp, "wb") as f:
+                f.write(arquivo_usuario.getbuffer())
+            
+            # Chama a função do robô
+            resultado = rodar_robo(nome_arquivo_temp)
+            
+            # Mostra o resultado
+            if "Erro" in resultado:
+                st.error(resultado)
+            else:
+                st.success(resultado)
+            
+            # Limpeza: remove o arquivo temporário
+            os.remove(nome_arquivo_temp)
