@@ -8,96 +8,103 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
 import os
+import re
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Robô Filtro OC 2025", layout="centered")
+st.set_page_config(page_title="Garimpeiro TJSP 2025", layout="centered")
 
-st.title("🛡️ Robô de Seleção (OC 2025 + 300k)")
+st.title("⛏️ Robô Garimpeiro TJSP (2025)")
 st.markdown("""
-**Regras de Aprovação do Robô:**
-1. O processo deve ser do ano **2025** (Ex: ...48.2025.8.26...).
-2. O valor deve ser **maior que R$ 300.000,00**.
+**Modo 100% Autônomo:**
+O robô vai **GERAR** números de processos sequenciais do ano de 2025, verificar se existem e filtrar os valores altos.
 """)
 
-# --- 2. FUNÇÃO DO ROBÔ ---
-def rodar_robo(caminho_entrada, caminho_saida):
+# --- 2. FUNÇÃO MATEMÁTICA (CRIA O NÚMERO VÁLIDO) ---
+def calcular_digito_cnj(numero_sequencial, ano, orgao=8, tribunal=26, foro=100):
+    """
+    Calcula os dígitos verificadores (DD) conforme regra do CNJ (Módulo 97).
+    Ex: Para 1000872, ano 2025 -> Retorna o número completo com traço.
+    """
+    # Formato CNJ: NNNNNNN-DD.AAAA.J.TR.OOOO
+    # A fórmula coloca tudo num numerão só e faz MOD 97
+    numero_base = f"{int(numero_sequencial):07d}{ano}{orgao:01d}{tribunal:02d}{foro:04d}00"
+    numero_int = int(numero_base)
+    resto = numero_int % 97
+    digito = 98 - resto
     
-    # --- CONFIGURAÇÃO BLINDADA PARA NUVEM ---
+    return f"{int(numero_sequencial):07d}-{digito:02d}.{ano}.{orgao}.{tribunal}.{foro:04d}"
+
+# --- 3. FUNÇÃO DO ROBÔ ---
+def rodar_garimpo(inicio_seq, quantidade, foro_id):
+    
+    # --- CONFIGURAÇÃO NUVEM ---
     chrome_options = Options()
     chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-
+    
     chrome_options.binary_location = "/usr/bin/chromium"
     service = Service("/usr/bin/chromedriver")
 
     driver = None
+    resultados = []
     
     try:
-        # Lê a planilha
-        df_entrada = pd.read_excel(caminho_entrada)
-        
-        # Garante a coluna certa
-        if "Processos" not in df_entrada.columns:
-            coluna_alvo = df_entrada.columns[0]
-        else:
-            coluna_alvo = "Processos"
-            
-        lista_processos = df_entrada[coluna_alvo].astype(str).tolist()
-        resultados = []
-
-        # Inicia Driver
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        wait = WebDriverWait(driver, 3) # Espera curta para ser rápido
         
-        st.info(f"Aplicando filtro em {len(lista_processos)} processos...")
+        st.info(f"Gerando lista de {quantidade} números a partir do sequencial {inicio_seq}...")
         barra_progresso = st.progress(0)
         
-        # --- LOOP PELOS PROCESSOS ---
-        for i, processo in enumerate(lista_processos):
+        # --- LOOP DE GERAÇÃO E TESTE ---
+        for i in range(quantidade):
             
-            # Limpeza do número
-            processo = processo.strip()
+            # 1. GERA O NÚMERO
+            seq_atual = inicio_seq + i
+            processo_gerado = calcular_digito_cnj(seq_atual, 2025, foro=int(foro_id))
             
-            dados_processo = {
-                "Processo": processo,
-                "Ano_Identificado": "N/D",
-                "Valor_Numerico": 0.0,
-                "Status": "AGUARDANDO"
+            dados = {
+                "Processo": processo_gerado,
+                "Status_Site": "Não verificado",
+                "Valor": 0.0,
+                "Resultado": "DESCARTADO"
             }
-
-            # --- REGRA 1: VERIFICA SE É 2025 ANTES MESMO DE ENTRAR NO SITE ---
-            # O número padrão CNJ tem o ano na 3ª parte: NNNNNNN-DD.AAAA.J.TR.OOOO
-            # Ex: 1000872-48.2025.8.26.0100 -> O robô procura ".2025."
-            eh_ano_25 = ".2025." in processo or "2025" in processo
-            
-            dados_processo["Ano_Identificado"] = "2025" if eh_ano_25 else "Outro"
-
-            # Se NÃO for 2025, a gente já pode descartar ou marcar, mas
-            # vamos entrar no site de qualquer jeito para pegar o valor e ter certeza?
-            # Se você quiser economizar tempo, podemos pular os que não são 2025.
-            # Vou deixar ele verificar todos para garantir o valor.
 
             try:
                 driver.get("https://esaj.tjsp.jus.br/cpopg/open.do")
                 
-                # Quebra o número para preencher
-                if "8.26" in processo:
-                    parte_numero_ano = processo.split("8.26")[0].strip(".")
-                    parte_foro = processo.split(".")[-1]
-                else:
-                    parte_numero_ano = processo
-                    parte_foro = ""
+                # Quebra para preencher (Redundância necessária para o site)
+                parte_numero = processo_gerado.split("-")[0]
+                parte_digito = processo_gerado.split("-")[1].split(".")[0]
+                parte_foro_str = str(foro_id)
 
-                # Preenche e consulta
-                driver.find_element(By.ID, "numeroDigitoAnoUnificado").clear()
-                driver.find_element(By.ID, "numeroDigitoAnoUnificado").send_keys(parte_numero_ano)
-                driver.find_element(By.ID, "foroNumeroUnificado").clear()
-                driver.find_element(By.ID, "foroNumeroUnificado").send_keys(parte_foro)
+                # Preenche campos
+                campo_num = driver.find_element(By.ID, "numeroDigitoAnoUnificado")
+                campo_num.clear()
+                # Digita NNNNNNNDD2025 (O campo aceita tudo junto)
+                campo_num.send_keys(f"{parte_numero}{parte_digito}2025")
+                
+                campo_foro = driver.find_element(By.ID, "foroNumeroUnificado")
+                campo_foro.clear()
+                campo_foro.send_keys(parte_foro_str)
+                
                 driver.find_element(By.ID, "botaoConsultarProcessos").click()
 
-                # Tratamento de popup de seleção
+                # --- VERIFICA SE O PROCESSO EXISTE ---
+                # Se aparecer mensagem de erro, o processo ainda não foi distribuído
+                try:
+                    msg = driver.find_element(By.ID, "mensagemRetorno").text
+                    if "Não existem" in msg:
+                        dados["Status_Site"] = "INEXISTENTE (Vago)"
+                        resultados.append(dados)
+                        barra_progresso.progress((i + 1) / quantidade)
+                        continue # Pula para o próximo
+                except:
+                    pass # Se não tem erro, o processo existe!
+
+                # Clica se for lista
                 try:
                     lista = driver.find_elements(By.ID, "processoSelecionado")
                     if lista:
@@ -105,95 +112,89 @@ def rodar_robo(caminho_entrada, caminho_saida):
                         driver.find_element(By.ID, "botaoDetalhes").click()
                 except: pass
                 
-                WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "tabelaTodasMovimentacoes")))
+                # Espera carregar
+                wait.until(EC.presence_of_element_located((By.ID, "tabelaTodasMovimentacoes")))
+                dados["Status_Site"] = "ATIVO"
+
+                # --- LÊ O VALOR ---
+                texto_pagina = driver.find_element(By.TAG_NAME, "body").text
+                valor_bruto = "0"
                 
-                # Expande detalhes
-                try:
-                    link = driver.find_element(By.ID, "linkMaisDetalhes")
-                    if link.is_displayed(): link.click()
-                except: pass
+                if "Valor da ação:" in texto_pagina:
+                    inicio = texto_pagina.find("Valor da ação:") + 14
+                    fim = texto_pagina.find("\n", inicio)
+                    valor_bruto = texto_pagina[inicio:fim]
 
-                # --- BUSCA VALOR ---
-                valor_bruto = ""
-                try:
-                    elem = driver.find_element(By.ID, "valorAcaoProcesso")
-                    valor_bruto = elem.get_attribute("textContent")
-                except: pass
-
-                # Limpeza do Valor (R$ 1.000,00 -> 1000.00)
+                # Limpa valor
                 valor_limpo = "".join([c for c in valor_bruto if c.isdigit()])
-                try: 
-                    valor_float = float(valor_limpo) / 100 
-                except: 
+                try:
+                    valor_float = float(valor_limpo) / 100
+                except:
                     valor_float = 0.0
-
-                # --- APLICAÇÃO DAS REGRAS FINAIS ---
-                # Regra: Ano 2025 E Valor > 300.000
                 
-                if eh_ano_25 and valor_float > 300000:
-                    status = "✅ APROVADO (OC 25 + >300k)"
-                elif eh_ano_25 and valor_float <= 300000:
-                    status = "❌ REPROVADO (OC 25 mas Valor Baixo)"
+                dados["Valor"] = valor_float
+
+                # --- FILTRO DE OURO (> 300k) ---
+                if valor_float > 300000:
+                    dados["Resultado"] = "✅ ACHAMOS OURO!"
                 else:
-                    status = "❌ REPROVADO (Ano Incorreto)"
-
-                # Salva os dados
-                dados_processo["Valor_Numerico"] = valor_float
-                dados_processo["Status"] = status
-
-                # Pequena pausa
-                time.sleep(0.5)
+                    dados["Resultado"] = "Valor Baixo"
 
             except Exception as e:
-                dados_processo["Status"] = f"Erro ao ler site"
+                dados["Status_Site"] = "Erro de Leitura"
+            
+            resultados.append(dados)
+            barra_progresso.progress((i + 1) / quantidade)
+            
+            # Pequena pausa
+            time.sleep(0.5)
 
-            resultados.append(dados_processo)
-            barra_progresso.progress((i + 1) / len(lista_processos))
-
-        # --- FIM DO LOOP ---
-        
+        # --- FIM ---
         df_final = pd.DataFrame(resultados)
         
-        # Filtra para o Excel final mostrar primeiro os APROVADOS
-        df_final = df_final.sort_values(by="Valor_Numerico", ascending=False)
+        # Filtra para salvar só o que existe (opcional)
+        # df_final = df_final[df_final["Status_Site"] == "ATIVO"]
         
-        df_final.to_excel(caminho_saida, index=False)
-        return True, "Filtro concluído! Baixe a planilha classificada."
+        df_final = df_final.sort_values(by="Valor", ascending=False)
+        return df_final
 
     except Exception as e:
-        return False, f"Erro Crítico: {e}"
+        st.error(f"Erro Crítico: {e}")
+        return pd.DataFrame()
         
     finally:
         if driver:
             driver.quit()
 
-# --- 3. INTERFACE VISUAL ---
+# --- 4. INTERFACE DE COMANDO ---
 
-arquivo_usuario = st.file_uploader("Suba a planilha com os Processos", type=["xlsx"])
+col1, col2 = st.columns(2)
+with col1:
+    inicio = st.number_input("Começar do Nº Sequencial:", min_value=1, value=1000000, step=1)
+    st.caption("Ex: 1000000 (para gerar 1000000-xx.2025...)")
 
-if arquivo_usuario is not None:
-    if st.button("🔍 Filtrar OC 25 > 300k"):
+with col2:
+    qtd = st.number_input("Quantos investigar?", min_value=1, max_value=50, value=10)
+    st.caption("Recomendado: 10 a 20 por vez para não bloquear.")
+
+foro = st.text_input("Código do Foro (Padrão SP Capital = 0100)", value="0100")
+
+if st.button("⛏️ Iniciar Garimpo"):
+    with st.spinner(f"O robô está gerando números de 2025 e testando no Foro {foro}..."):
         
-        with st.spinner('O robô está verificando ano e valores...'):
-            temp_entrada = f"temp_{arquivo_usuario.name}"
-            temp_saida = "Resultado_Filtro_OC25.xlsx"
+        df_resultado = rodar_garimpo(inicio, qtd, foro)
+        
+        if not df_resultado.empty:
+            st.success("Varredura concluída!")
+            st.dataframe(df_resultado)
             
-            with open(temp_entrada, "wb") as f:
-                f.write(arquivo_usuario.getbuffer())
-            
-            sucesso, mensagem = rodar_robo(temp_entrada, temp_saida)
-            
-            if sucesso:
-                st.success(mensagem)
-                with open(temp_saida, "rb") as file:
-                    st.download_button(
-                        label="📥 Baixar Planilha Filtrada",
-                        data=file,
-                        file_name="Processos_OC25_Filtrados.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            else:
-                st.error(mensagem)
-            
-            if os.path.exists(temp_entrada):
-                os.remove(temp_entrada)
+            # Botão Download
+            csv = df_resultado.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "📥 Baixar Relatório",
+                data=csv,
+                file_name="Garimpo_TJSP.csv",
+                mime="text/csv",
+            )
+        else:
+            st.warning("Nenhum dado foi coletado ou ocorreu um erro.")
